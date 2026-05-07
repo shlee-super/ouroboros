@@ -274,7 +274,7 @@ async def test_driver_answerer_missing_hermes_becomes_recoverable_blocker() -> N
 
 
 @pytest.mark.asyncio
-async def test_driver_answerer_risky_brake_off_records_active_risk() -> None:
+async def test_driver_answerer_risky_brake_off_records_non_required_risk() -> None:
     from ouroboros.auto.ledger import LedgerSource, LedgerStatus
 
     ledger = SeedDraftLedger.from_goal("Deploy a service")
@@ -284,13 +284,19 @@ async def test_driver_answerer_risky_brake_off_records_active_risk() -> None:
     answer = await answerer.answer("Which production credentials should we use?", ledger)
 
     risks = [
-        entry
-        for _section, entry in answer.ledger_updates
+        (section, entry)
+        for section, entry in answer.ledger_updates
         if entry.key.startswith("risk.auto_driver")
     ]
     assert risks
-    assert risks[0].source == LedgerSource.ASSUMPTION
-    assert risks[0].status == LedgerStatus.INFERRED
+    risk_section, risk_entry = risks[0]
+    assert risk_section == "risks"
+    assert risk_entry.source == LedgerSource.INFERENCE
+    assert risk_entry.status == LedgerStatus.INFERRED
+    assert all(
+        section != "constraints" or not entry.key.startswith("risk.auto_driver")
+        for section, entry in answer.ledger_updates
+    )
 
 
 @pytest.mark.asyncio

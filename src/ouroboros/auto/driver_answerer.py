@@ -262,14 +262,17 @@ def _ledger_updates_for(
     if risk:
         updates.append(
             (
-                "constraints",
+                "risks",
                 LedgerEntry(
                     key=f"risk.auto_driver.{_slug_key(risk)}",
                     value=f"Driver {backend} auto-sent a risky interview answer under brake=off: {risk}",
-                    source=LedgerSource.ASSUMPTION,
+                    source=LedgerSource.INFERENCE,
                     confidence=0.6,
                     status=LedgerStatus.INFERRED,
-                    rationale="Risk was preserved as provenance for Seed-ready and A-grade review gates.",
+                    rationale=(
+                        "Risk was preserved as non-required provenance for Seed-ready "
+                        "and A-grade review gates."
+                    ),
                 ),
             )
         )
