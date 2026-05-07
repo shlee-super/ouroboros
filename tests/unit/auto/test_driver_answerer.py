@@ -5,6 +5,7 @@ import pytest
 from ouroboros.auto.answerer import AutoAnswerContext, AutoAnswerSource
 from ouroboros.auto.driver_answerer import (
     DriverAutoAnswerer,
+    _driver_text_supports_entry,
     _ledger_updates_for,
     classify_interview_answer_risk,
 )
@@ -145,6 +146,13 @@ async def test_driver_answerer_preserves_confirmed_scaffold_status() -> None:
     ]
     assert runtime_updates
     assert any(entry.status is LedgerStatus.CONFIRMED for entry in runtime_updates)
+
+
+def test_driver_text_supports_existing_stack_paraphrase() -> None:
+    assert _driver_text_supports_entry(
+        "Follow the repo's current stack.",
+        "Existing repository runtime, package manager, and architectural patterns.",
+    )
 
 
 @pytest.mark.asyncio

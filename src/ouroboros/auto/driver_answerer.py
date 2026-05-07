@@ -319,24 +319,82 @@ _SUPPORT_STOPWORDS = frozenset(
         "are",
         "by",
         "for",
-        "package",
         "managed",
         "the",
         "use",
         "with",
         "should",
+    }
+)
+
+_SUPPORT_SYNONYMS: dict[str, frozenset[str]] = {
+    "architecture": frozenset(
+        {"architectural", "architecture", "conventions", "patterns", "stack"}
+    ),
+    "architectural": frozenset(
+        {"architectural", "architecture", "conventions", "patterns", "stack"}
+    ),
+    "conventions": frozenset({"architectural", "architecture", "conventions", "patterns", "stack"}),
+    "current": frozenset({"current", "existing", "project", "repo", "repository"}),
+    "existing": frozenset({"current", "existing", "project", "repo", "repository"}),
+    "framework": frozenset({"framework", "runtime", "stack"}),
+    "package": frozenset({"package", "package manager", "stack"}),
+    "patterns": frozenset({"architectural", "architecture", "conventions", "patterns", "stack"}),
+    "project": frozenset({"current", "existing", "project", "repo", "repository"}),
+    "repo": frozenset({"current", "existing", "project", "repo", "repository"}),
+    "repository": frozenset({"current", "existing", "project", "repo", "repository"}),
+    "runtime": frozenset({"framework", "runtime", "stack"}),
+    "stack": frozenset({"framework", "runtime", "stack"}),
+}
+
+_SUPPORT_CONFLICT_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"python", "rust", "typescript", "javascript", "node", "go"}),
+    frozenset({"uv", "poetry", "pipenv", "cargo", "npm", "pnpm", "yarn"}),
+)
+
+_EXISTING_CONTRACT_TOKENS = frozenset(
+    {"current", "existing", "project", "repo", "repository", "conventions", "patterns", "stack"}
+)
+_SCAFFOLD_CONTRACT_TOKENS = frozenset(
+    {
+        "architecture",
+        "architectural",
+        "conventions",
         "existing",
+        "package",
+        "patterns",
+        "repository",
+        "runtime",
+        "stack",
     }
 )
 
 
 def _driver_text_supports_entry(driver_text: str, scaffold_value: str) -> bool:
-    """Return True when the driver answer visibly supports a scaffold value."""
+    """Return True when the driver answer visibly supports a scaffold value.
+
+    The check is intentionally conservative about contradictions (for example,
+    ``uv`` vs ``poetry``), but it cannot require every scaffold word verbatim:
+    selected drivers often answer with semantically equivalent shorthand like
+    "follow the repo's current stack" for a scaffold value about existing
+    repository runtime/package-manager/architecture conventions.
+    """
     scaffold_tokens = _support_tokens(scaffold_value)
     if not scaffold_tokens:
         return False
     driver_tokens = _support_tokens(driver_text)
-    return scaffold_tokens <= driver_tokens
+    if not driver_tokens or _has_support_conflict(scaffold_tokens, driver_tokens):
+        return False
+
+    expanded_driver_tokens = _expand_support_tokens(driver_tokens)
+    if scaffold_tokens <= expanded_driver_tokens:
+        return True
+
+    overlap = scaffold_tokens & expanded_driver_tokens
+    if len(overlap) / len(scaffold_tokens) >= 0.6:
+        return True
+
+    return _driver_affirms_existing_contract(scaffold_tokens, expanded_driver_tokens)
 
 
 def _support_tokens(value: str) -> set[str]:
@@ -345,6 +403,30 @@ def _support_tokens(value: str) -> set[str]:
         for token in re.findall(r"[a-z0-9]+", value.lower())
         if token not in _SUPPORT_STOPWORDS and len(token) >= 2
     }
+
+
+def _expand_support_tokens(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    for token in tokens:
+        expanded.update(_SUPPORT_SYNONYMS.get(token, ()))
+    return expanded
+
+
+def _has_support_conflict(scaffold_tokens: set[str], driver_tokens: set[str]) -> bool:
+    for group in _SUPPORT_CONFLICT_GROUPS:
+        scaffold_terms = scaffold_tokens & group
+        driver_terms = driver_tokens & group
+        if scaffold_terms and driver_terms and scaffold_terms.isdisjoint(driver_terms):
+            return True
+    return False
+
+
+def _driver_affirms_existing_contract(
+    scaffold_tokens: set[str], expanded_driver_tokens: set[str]
+) -> bool:
+    return bool(scaffold_tokens & _SCAFFOLD_CONTRACT_TOKENS) and bool(
+        expanded_driver_tokens & _EXISTING_CONTRACT_TOKENS
+    )
 
 
 def _slug_key(value: str) -> str:
