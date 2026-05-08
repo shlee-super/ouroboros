@@ -105,10 +105,7 @@ def test_argv_per_element_byte_cap_truncates_into_sentinel(tmp_path: Path) -> No
     — and then deep-copied again by ``ledger_adapter.wrap_plugin_event``.
     That is a local DoS / log-bloat vector with no upside.
     """
-    from ouroboros.plugin.firewall import (
-        ARGV_ELEMENT_BYTE_LIMIT,
-        ARGV_TOTAL_BYTE_LIMIT,
-    )
+    from ouroboros.plugin.firewall import ARGV_ELEMENT_BYTE_LIMIT
 
     program = _make_program(tmp_path)
     trust = TrustStore(root=tmp_path / "trust").grant(
