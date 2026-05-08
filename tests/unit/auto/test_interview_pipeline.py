@@ -1102,6 +1102,133 @@ async def test_interview_driver_steers_generic_questions_to_open_gaps(tmp_path) 
     assert any("runtime" in item.lower() for item in answers)
 
 
+@pytest.mark.asyncio
+async def test_interview_driver_uses_gap_answers_when_generic_defaults_repeat(tmp_path) -> None:
+    answers: list[str] = []
+
+    async def start(goal: str, cwd: str) -> InterviewTurn:  # noqa: ARG001
+        return InterviewTurn("Anything else?", "interview_1")
+
+    async def answer(session_id: str, text: str) -> InterviewTurn:  # noqa: ARG001
+        answers.append(text)
+        completed = len(answers) >= 5
+        return InterviewTurn("Anything else?", session_id, completed=completed)
+
+    state = AutoPipelineState(goal="Build a local report generator", cwd=str(tmp_path))
+    ledger = SeedDraftLedger.from_goal(state.goal)
+    driver = AutoInterviewDriver(
+        FunctionInterviewBackend(start, answer), store=AutoStore(tmp_path), max_rounds=6
+    )
+
+    result = await driver.run(state, ledger)
+
+    assert result.status == "seed_ready"
+    assert ledger.open_gaps() == []
+    assert sum("conservative mvp" in item.lower() for item in answers) == 1
+    assert any("single local user" in item.lower() for item in answers)
+    assert any("non-goals" in item.lower() or "non-goal" in item.lower() for item in answers)
+    assert any("runtime" in item.lower() for item in answers)
+
+
+@pytest.mark.asyncio
+async def test_interview_driver_preserves_specific_acceptance_answers_with_open_gaps(
+    tmp_path,
+) -> None:
+    answers: list[str] = []
+    questions = iter(
+        [
+            "What acceptance criteria should the search feature satisfy?",
+            "What acceptance criteria should the export feature satisfy?",
+        ]
+    )
+
+    async def start(goal: str, cwd: str) -> InterviewTurn:  # noqa: ARG001
+        return InterviewTurn(next(questions), "interview_1")
+
+    async def answer(session_id: str, text: str) -> InterviewTurn:  # noqa: ARG001
+        answers.append(text)
+        try:
+            next_q = next(questions)
+        except StopIteration:
+            return InterviewTurn("Anything else?", session_id, completed=True)
+        return InterviewTurn(next_q, session_id)
+
+    state = AutoPipelineState(goal="Build a local CLI", cwd=str(tmp_path))
+    ledger = SeedDraftLedger.from_goal(state.goal)
+    driver = AutoInterviewDriver(
+        FunctionInterviewBackend(start, answer), store=AutoStore(tmp_path), max_rounds=4
+    )
+
+    await driver.run(state, ledger)
+
+    # Both specific feature/acceptance prompts should produce feature-specific
+    # answers even though other required ledger sections (e.g. actors,
+    # runtime_context) remain open. The driver must not replace them with
+    # gap-targeted fallbacks.
+    assert len(answers) >= 2, answers
+    assert "search feature" in answers[0].lower()
+    assert "export feature" in answers[1].lower()
+
+
+@pytest.mark.asyncio
+async def test_interview_driver_preserves_repeated_specific_acceptance_answer(
+    tmp_path,
+) -> None:
+    """A specific feature/acceptance prompt asked twice while other sections are
+    still open should still be answered specifically each time, not silently
+    replaced by a gap-targeted fallback.
+    """
+    answers: list[str] = []
+    repeated_question = "What acceptance criteria should the search feature satisfy?"
+    rounds = {"n": 0}
+
+    async def start(goal: str, cwd: str) -> InterviewTurn:  # noqa: ARG001
+        return InterviewTurn(repeated_question, "interview_1")
+
+    async def answer(session_id: str, text: str) -> InterviewTurn:  # noqa: ARG001
+        answers.append(text)
+        rounds["n"] += 1
+        if rounds["n"] >= 2:
+            return InterviewTurn("Anything else?", session_id, completed=True)
+        return InterviewTurn(repeated_question, session_id)
+
+    state = AutoPipelineState(goal="Build a local CLI", cwd=str(tmp_path))
+    ledger = SeedDraftLedger.from_goal(state.goal)
+    driver = AutoInterviewDriver(
+        FunctionInterviewBackend(start, answer), store=AutoStore(tmp_path), max_rounds=4
+    )
+
+    await driver.run(state, ledger)
+
+    assert len(answers) >= 2, answers
+    assert "search feature" in answers[0].lower()
+    assert "search feature" in answers[1].lower()
+
+
+@pytest.mark.asyncio
+async def test_interview_driver_blocks_blank_goal_before_gap_defaults(tmp_path) -> None:
+    answers: list[str] = []
+
+    async def start(goal: str, cwd: str) -> InterviewTurn:  # noqa: ARG001
+        return InterviewTurn("Anything else?", "interview_1")
+
+    async def answer(session_id: str, text: str) -> InterviewTurn:  # noqa: ARG001
+        answers.append(text)
+        return InterviewTurn("Anything else?", session_id)
+
+    state = AutoPipelineState(goal="Build a local tool", cwd=str(tmp_path))
+    ledger = SeedDraftLedger.from_goal("")
+    driver = AutoInterviewDriver(
+        FunctionInterviewBackend(start, answer), store=AutoStore(tmp_path), max_rounds=3
+    )
+
+    result = await driver.run(state, ledger)
+
+    assert result.status == "blocked"
+    assert "goal is weak" in (result.blocker or "")
+    assert answers == []
+
+
 def test_auto_state_rejects_malformed_resume_optional_fields() -> None:
     base = AutoPipelineState(goal="Build a CLI", cwd="/tmp/project").to_dict()
     base["pending_question"] = []
