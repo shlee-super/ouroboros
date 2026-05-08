@@ -619,8 +619,22 @@ class ClaudeCodeAdapter:
         # The bundled CLI refuses to start when CLAUDECODE is set (nested
         # session check).  The Agent SDK sets CLAUDE_CODE_ENTRYPOINT=sdk-py
         # to signal it's an SDK call, but the older check on CLAUDECODE fires
-        # first, causing silent empty responses.  Strip it via env override.
-        claudecode_present = bool(os.environ.get("CLAUDECODE"))
+        # first, causing silent empty responses.
+        #
+        # Earlier this set ``env_overrides["CLAUDECODE"] = ""`` to mask the
+        # value, but the SDK builds the subprocess env via
+        # ``{**os.environ, ..., **options.env, ...}``
+        # (claude_agent_sdk/_internal/transport/subprocess_cli.py around
+        # line 348). An overlay value of ``""`` keeps the KEY present in the
+        # final env dict — so any nested-session check that uses key
+        # presence (``"CLAUDECODE" in env`` / ``${CLAUDECODE+x}``) rather
+        # than value truthiness still fires. To make the unset robust
+        # regardless of which check the CLI performs, we temporarily pop
+        # the var from ``os.environ`` while the SDK overlays — that
+        # removes it from the final subprocess env entirely. The pop is
+        # restored in a ``try/finally`` after the awaitable completes so
+        # concurrent code in the same interpreter never sees the var
+        # missing for longer than this single call.
         env_overrides: dict[str, str] = {
             # Skip the per-call `claude -v` subprocess that the Agent SDK runs
             # to verify version compatibility.  This is advisory-only — version
@@ -632,8 +646,6 @@ class ClaudeCodeAdapter:
                 "OUROBOROS_SKIP_VERSION_CHECK", "1"
             ),
         }
-        if claudecode_present:
-            env_overrides["CLAUDECODE"] = ""
 
         stderr_lines: list[str] = []
 
@@ -743,6 +755,15 @@ class ClaudeCodeAdapter:
 
         options = ClaudeAgentOptions(**options_kwargs)
 
+        # Snapshot CLAUDECODE before the SDK overlays os.environ. We pop
+        # it from os.environ for the duration of the SDK call below so the
+        # bundled CLI's nested-session check sees no key at all (which is
+        # robust against both ``[ -n $CLAUDECODE ]`` value-truthy and
+        # ``${CLAUDECODE+x}`` key-presence variants). Restored in the
+        # finally below.
+        claudecode_present = "CLAUDECODE" in os.environ
+        claudecode_saved = os.environ.get("CLAUDECODE")
+
         log.debug(
             "claude_code_adapter.sdk_request_configured",
             max_turns=options_kwargs["max_turns"],
@@ -780,6 +801,11 @@ class ClaudeCodeAdapter:
                 except StopAsyncIteration:
                     break
 
+        # Pop CLAUDECODE from os.environ for the duration of the SDK
+        # call so it is genuinely absent from the spawned subprocess's
+        # environment, not merely valued at the empty string.
+        if claudecode_present:
+            os.environ.pop("CLAUDECODE", None)
         try:
             async for sdk_message in _safe_query():
                 class_name = type(sdk_message).__name__
@@ -893,6 +919,10 @@ class ClaudeCodeAdapter:
                             },
                         )
         except asyncio.CancelledError:
+            # Restore on cancel before re-raising so a cancelled call
+            # does not leave the parent process without CLAUDECODE.
+            if claudecode_present and "CLAUDECODE" not in os.environ:
+                os.environ["CLAUDECODE"] = claudecode_saved or ""
             raise
         except Exception as exc:
             stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
@@ -925,6 +955,12 @@ class ClaudeCodeAdapter:
                     },
                 )
             )
+        finally:
+            # Always restore CLAUDECODE so a sibling adapter call (or any
+            # other code in the same interpreter that observes os.environ)
+            # never sees the var missing for longer than this single call.
+            if claudecode_present and "CLAUDECODE" not in os.environ:
+                os.environ["CLAUDECODE"] = claudecode_saved or ""
 
         # After generator completes naturally, check for errors
         if error_result:

@@ -323,6 +323,76 @@ class TestAdapterOverheadReductions:
         env = options_call_kwargs.get("env", {})
         assert env.get("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK") == "0"
 
+    @pytest.mark.asyncio
+    async def test_claudecode_var_is_popped_for_subprocess_call(self) -> None:
+        """``CLAUDECODE=1`` (set by Claude Code itself when it spawns a
+        nested process) must NOT leak into the SDK subprocess.
+
+        Earlier the adapter did ``env_overrides["CLAUDECODE"] = ""`` to
+        mask the value, but the SDK builds the subprocess env via
+        ``{**os.environ, ..., **options.env, ...}``. An overlay value
+        of ``""`` keeps the KEY present in the final env dict — so any
+        nested-session check that uses key presence
+        (``"CLAUDECODE" in env``, shell ``${CLAUDECODE+x}``) still
+        fires and the bundled CLI silently produces an empty response.
+
+        The fix pops ``CLAUDECODE`` from ``os.environ`` for the
+        duration of the SDK call, which removes the key from the
+        merged subprocess env entirely.
+        """
+        adapter = ClaudeCodeAdapter()
+        config = CompletionConfig(model="claude-sonnet-4-6")
+
+        mock_options_cls = MagicMock()
+        # Capture os.environ at the moment `query` is called — that is
+        # exactly when the SDK builds the subprocess env from
+        # ``{**os.environ, ..., **options.env, ...}``.
+        captured_environ_snapshot: dict[str, str] = {}
+
+        async def fake_query(*args, **kwargs):
+            captured_environ_snapshot.update(os.environ)
+            msg = MagicMock()
+            type(msg).__name__ = "ResultMessage"
+            msg.structured_output = None
+            msg.result = "test response"
+            msg.is_error = False
+            yield msg
+
+        sdk_module = _make_sdk_mock(mock_options_cls, MagicMock(side_effect=fake_query))
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "claude_agent_sdk": sdk_module,
+                    "claude_agent_sdk._errors": sdk_module._errors,
+                },
+            ),
+            patch.dict("os.environ", {"CLAUDECODE": "1"}, clear=False),
+        ):
+            assert os.environ.get("CLAUDECODE") == "1"
+            await adapter._execute_single_request("test prompt", config)
+            # After the call returns, CLAUDECODE must be restored to its
+            # original value so concurrent code in the same interpreter
+            # never sees the var missing for longer than the call.
+            assert os.environ.get("CLAUDECODE") == "1", (
+                "CLAUDECODE must be restored after the SDK call"
+            )
+
+        # During the SDK call itself the key was absent.
+        assert "CLAUDECODE" not in captured_environ_snapshot, (
+            "CLAUDECODE must be popped from os.environ for the duration of the SDK call"
+        )
+
+        # And the env_overrides dict no longer carries the empty-string
+        # masking value (which left the key present in the merged env).
+        options_call_kwargs = mock_options_cls.call_args.kwargs
+        env = options_call_kwargs.get("env", {})
+        assert "CLAUDECODE" not in env, (
+            "env overrides must not re-introduce CLAUDECODE — the os.environ pop "
+            "is the single source of truth for the unset"
+        )
+
     def test_initial_backoff_is_half_second(self) -> None:
         """_INITIAL_BACKOFF_SECONDS should be 0.5 for interactive responsiveness."""
         from ouroboros.providers.claude_code_adapter import _INITIAL_BACKOFF_SECONDS
