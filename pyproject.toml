@@ -124,6 +124,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "slow: integration tests that build artifacts or call subprocesses",
+]
 
 [tool.ruff]
 line-length = 100

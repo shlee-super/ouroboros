@@ -105,3 +105,91 @@ class TestSchemaValidation:
         profile = load_profile("code")
         with pytest.raises(ValueError, match="frozen"):
             profile.axis = "mutated"  # type: ignore[misc]
+
+
+class TestIoErrorNormalization:
+    """Filesystem + decoding errors must surface as ProfileError.
+
+    The loader documents that callers see ProfileError on every failure
+    mode, but the read-text call could leak OSError / UnicodeDecodeError
+    (bot finding on PR #881). Normalize both to ProfileError so the
+    contract holds in production.
+    """
+
+    def test_invalid_utf8_raises_profile_error(self, tmp_path: Path) -> None:
+        path = tmp_path / "garbled.yaml"
+        # 0xff is not a valid first byte in any UTF-8 sequence.
+        path.write_bytes(b"\xff\xfe garbage\n")
+        with pytest.raises(ProfileError, match="not valid UTF-8"):
+            load_profile("garbled", profiles_dir=tmp_path)
+
+    def test_unreadable_file_raises_profile_error(self, tmp_path: Path) -> None:
+        import os
+        import stat
+
+        path = tmp_path / "locked.yaml"
+        path.write_text(
+            "profile: locked\naxis: x\nmin_unit: y\nverifier_focus: z\n",
+            encoding="utf-8",
+        )
+        path.chmod(0)
+        try:
+            # Root can bypass the permission denial — skip if so.
+            if os.geteuid() == 0:
+                pytest.skip("root bypasses permission denial")
+            with pytest.raises(ProfileError, match="could not be read"):
+                load_profile("locked", profiles_dir=tmp_path)
+        finally:
+            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+class TestWheelPackaging:
+    """The bundled profile YAMLs must reach the installed wheel.
+
+    The loader resolves YAMLs via ``Path(__file__).parent.parent /
+    "profiles"``. If the ``pyproject.toml`` ``force-include`` entry for
+    ``src/ouroboros/profiles`` is dropped, the source tree still works
+    but ``pip install`` of the wheel ships a loader that cannot find
+    any profile.
+
+    This regression test builds the wheel in a tmpdir and asserts every
+    bundled profile is present at the expected path inside the .whl.
+    Skipped if ``uv`` is not available on PATH (CI sandboxes that
+    cannot spawn external builds).
+    """
+
+    @pytest.mark.slow
+    def test_wheel_contains_profile_yamls(self, tmp_path: Path) -> None:
+        import shutil
+        import subprocess
+        import zipfile
+
+        if shutil.which("uv") is None:
+            pytest.skip("uv is not on PATH; cannot build the wheel here")
+
+        repo_root = Path(__file__).resolve().parents[3]
+        out = tmp_path / "dist"
+        result = subprocess.run(
+            ["uv", "build", "--wheel", "--out-dir", str(out)],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if result.returncode != 0:
+            pytest.skip(f"uv build did not produce a wheel: {result.stderr}")
+
+        wheels = list(out.glob("*.whl"))
+        assert wheels, f"no wheel produced in {out}"
+        wheel = wheels[0]
+        with zipfile.ZipFile(wheel) as zf:
+            names = set(zf.namelist())
+
+        for stem in ("code", "research", "analysis"):
+            expected = f"ouroboros/profiles/{stem}.yaml"
+            assert expected in names, (
+                f"{expected!r} missing from wheel; force-include in "
+                f"pyproject.toml probably regressed. Wheel contents (sample): "
+                f"{sorted(n for n in names if 'profile' in n)}"
+            )

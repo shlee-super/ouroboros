@@ -120,8 +120,20 @@ def load_profile(name: str, *, profiles_dir: Path | None = None) -> ExecutionPro
         msg = f"Profile not found: {name!r} (looked in {base})"
         raise ProfileError(msg)
 
+    # Normalize filesystem + decoding errors into ProfileError so the
+    # documented contract holds — callers should never see a raw OSError
+    # or UnicodeDecodeError leak from the production loader.
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        msg = f"Profile {name!r} could not be read from {path}: {exc}"
+        raise ProfileError(msg) from exc
+    except UnicodeDecodeError as exc:
+        msg = f"Profile {name!r} at {path} is not valid UTF-8: {exc.reason} (byte {exc.start})"
+        raise ProfileError(msg) from exc
+
+    try:
+        raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         msg = f"Profile {name!r} is not valid YAML: {exc}"
         raise ProfileError(msg) from exc
