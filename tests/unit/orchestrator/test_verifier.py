@@ -232,6 +232,49 @@ class TestVerifierExceptionWrapping:
                 ac="x",
             )
 
+    @pytest.mark.parametrize(
+        "operational_exc",
+        [
+            TimeoutError("LLM timed out"),
+            ConnectionError("network blip"),
+            OSError("transient FS error"),
+            __import__("subprocess").TimeoutExpired("pytest", 30),
+            __import__("subprocess").CalledProcessError(1, "pytest"),
+        ],
+    )
+    def test_operational_errors_become_stall_verdict(
+        self, code_profile: ExecutionProfile, operational_exc: BaseException
+    ) -> None:
+        # Bot finding on #884 r6: verifiers documented to run tests via
+        # subprocess hit TimeoutExpired / CalledProcessError; both must
+        # be absorbed as retryable STALL, not propagated as programming
+        # bugs.
+        captured_exc = operational_exc
+
+        def transient_then_pass(
+            *,
+            profile: ExecutionProfile,
+            ac: str,
+            leaf_output: str,
+            record: EvidenceRecord,
+        ) -> VerifierVerdict:
+            if not getattr(transient_then_pass, "fired", False):
+                transient_then_pass.fired = True  # type: ignore[attr-defined]
+                raise captured_exc
+            return VerifierVerdict(passed=True)
+
+        executor = ScriptedExecutor(outputs=[_code_evidence(), _code_evidence()])
+        result = run_with_verifier(
+            executor=executor,
+            verifier=transient_then_pass,
+            profile=code_profile,
+            ac="x",
+        )
+        assert result.accepted is True
+        assert result.attempts[0].verdict is not None
+        assert result.attempts[0].verdict.failure_class == "STALL"
+        assert any(type(captured_exc).__name__ in r for r in result.attempts[0].verdict.reasons)
+
     def test_verifier_exhausts_budget_on_persistent_timeouts(
         self, code_profile: ExecutionProfile
     ) -> None:

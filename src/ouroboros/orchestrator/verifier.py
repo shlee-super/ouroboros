@@ -31,6 +31,7 @@ The retry budget defaults to K=2 per shaun0927's H1 sketch in #830.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import subprocess
 from typing import Protocol
 
 from ouroboros.orchestrator.evidence_schema import (
@@ -45,17 +46,21 @@ from ouroboros.orchestrator.profile_loader import ExecutionProfile
 DEFAULT_MAX_RETRIES: int = 2
 
 # Exception types treated as *operational* failures (transient: network
-# blip, LLM timeout, subprocess crash). Anything outside this tuple is
-# treated as a deterministic programming bug and re-raised so production
-# diagnosis is not blocked by silent STALL retries. (Bot finding on
-# PR #884 r5: AttributeError / KeyError / AssertionError must not be
-# swallowed as transient failures.)
+# blip, LLM timeout, subprocess crash, non-zero test return code).
+# Anything outside this tuple is treated as a deterministic programming
+# bug and re-raised so production diagnosis is not blocked by silent
+# STALL retries. (Bot findings on PR #884: r5 — programming bugs must
+# propagate; r6 — subprocess.TimeoutExpired / subprocess.CalledProcessError
+# from test-running verifiers must be absorbed as STALL.)
 _OPERATIONAL_VERIFIER_ERRORS: tuple[type[BaseException], ...] = (
     TimeoutError,
     ConnectionError,  # parent of BrokenPipe/ConnectionRefused/etc.
     # OSError catches transient FS/subprocess/sockets. ConnectionError
     # subclasses OSError, but we list it explicitly above for clarity.
     OSError,
+    # Verifier impls following the module's documented model run tests
+    # via subprocess. Both timeout and non-zero exit must be retryable.
+    subprocess.SubprocessError,
 )
 
 
