@@ -52,7 +52,10 @@ class VerifierVerdict:
     Attributes:
         passed: True iff the verifier accepted the leaf result.
         reasons: Human-readable, harness-surfaceable failure reasons.
-            Must be empty when `passed` is True.
+            Must be empty when `passed` is True; must be non-empty
+            when `passed` is False (the retry loop feeds these back
+            to the executor — a bare FAIL with no reasons is opaque
+            and indistinguishable from the first attempt).
         failure_class: Optional hint for H7 (failure taxonomy). One of
             "EVIDENCE_MISSING", "FABRICATION_SUSPECTED", "SCOPE_CREEP",
             "STALL", "BLOCKED", or None for an unclassified failure.
@@ -68,6 +71,17 @@ class VerifierVerdict:
             raise ValueError(msg)
         if self.passed and self.failure_class is not None:
             msg = "VerifierVerdict(passed=True) must not carry a failure_class"
+            raise ValueError(msg)
+        if not self.passed and not self.reasons:
+            # A bare FAIL with no reasons produces no feedback for the
+            # retry executor and no surfaceable explanation on budget
+            # exhaustion. The harness cannot recover from an opaque
+            # FAIL, so reject it at construction time.
+            msg = (
+                "VerifierVerdict(passed=False) must include at least one "
+                "reason; the retry loop feeds reasons back to the "
+                "executor and surfaces them on exhaustion."
+            )
             raise ValueError(msg)
 
 

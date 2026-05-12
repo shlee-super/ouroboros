@@ -81,6 +81,23 @@ class TestVerifierVerdict:
         )
         assert verdict.passed is False
 
+    def test_fail_without_reasons_rejected(self) -> None:
+        # A bare FAIL produces no feedback for the retry executor and no
+        # explanation on budget exhaustion — rejected at construction
+        # time per #884 review.
+        with pytest.raises(ValueError, match="must include at least one reason"):
+            VerifierVerdict(passed=False)
+
+    def test_fail_empty_reasons_tuple_rejected(self) -> None:
+        with pytest.raises(ValueError, match="must include at least one reason"):
+            VerifierVerdict(passed=False, reasons=())
+
+    def test_fail_with_class_still_needs_reasons(self) -> None:
+        # failure_class alone is not enough — the executor needs prose
+        # to act on. Both are required when passed=False.
+        with pytest.raises(ValueError, match="must include at least one reason"):
+            VerifierVerdict(passed=False, failure_class="STALL")
+
 
 class TestHappyPath:
     def test_passes_on_first_attempt(self, code_profile: ExecutionProfile) -> None:
