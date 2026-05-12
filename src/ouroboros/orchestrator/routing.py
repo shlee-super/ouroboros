@@ -75,7 +75,15 @@ _TIER_ORDER: tuple[ModelTier, ...] = (ModelTier.HAIKU, ModelTier.SONNET, ModelTi
 # obedience (bot finding on PR #889 r3 reversed r2's keep-Bash position).
 # Profiles whose verifier_focus needs subprocess test execution must
 # route through a dedicated read-only test runner — see module docstring.
-_VERIFIER_TOOLS: tuple[str, ...] = ("Read", "Glob", "Grep")
+# NOTE: VERIFIER routing currently raises NotImplementedError (see
+# decide_route below), so the read-only tool tuple that used to live
+# here is intentionally removed. When the verifier seam ships with a
+# structured `verifier_capability` field on ExecutionProfile, restore
+# the (Read, Glob, Grep) tuple — or whatever the capability indicates —
+# inside the VERIFIER branch directly. Keeping it as a module-level
+# constant while the branch is unreachable created the false
+# impression that VERIFIER routing is partially implemented (bot
+# non-blocking suggestion on #889 r6).
 
 
 @dataclass(frozen=True)
